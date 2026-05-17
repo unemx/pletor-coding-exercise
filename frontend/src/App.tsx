@@ -31,6 +31,7 @@ const App = () => {
         margin: "2rem auto",
         fontFamily: "Inter, sans-serif",
         padding: "0 20px",
+        width: "100%",
       }}
     >
       <h1
