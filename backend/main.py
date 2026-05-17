@@ -3,18 +3,27 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from PIL import Image as PILImage
+from PIL import ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Integer, String, func, select
+from sqlalchemy import Column, DateTime, Integer, String, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # Configuration
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+THUMBNAIL_DIR = UPLOAD_DIR / "thumbnails"
+THUMBNAIL_DIR.mkdir(exist_ok=True)
+API_BASE_URL = "http://localhost:8000"
+CARD_THUMBNAIL_WIDTH = 400
+HIGH_DENSITY_THUMBNAIL_WIDTH = 800
+THUMBNAIL_QUALITY = 82
 FAILURE_RATE = 0.15  # 15% random failure rate to simulate real-world conditions
 
 DATABASE_URL = "sqlite+aiosqlite:///./test.db"
@@ -30,11 +39,17 @@ class Image(Base):
     title = Column(String, nullable=False)
     user = Column(String, nullable=False)
     url = Column(String, nullable=False)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    thumbnail_url = Column(String, nullable=True)
+    thumbnail_2x_url = Column(String, nullable=True)
 
 class ImageCreate(BaseModel):
     title: str
     user: str
     url: str
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 class ImageRead(BaseModel):
     id: int
@@ -42,15 +57,24 @@ class ImageRead(BaseModel):
     title: str
     user: str
     url: str
+    original_url: str
+    thumbnail_url: str
+    thumbnail_2x_url: Optional[str] = None
+    width: int
+    height: int
+    placeholder_hash: Optional[str] = None
+    placeholder_type: Optional[str] = None
     class Config:
         orm_mode = True
+        from_attributes = True
 
-def get_db():
-    db = SessionLocal()
-    try:
+class ImagePage(BaseModel):
+    items: List[ImageRead]
+    next_cursor: Optional[int] = None
+
+async def get_db():
+    async with SessionLocal() as db:
         yield db
-    finally:
-        db.close()
 
 app = FastAPI()
 
@@ -71,10 +95,153 @@ def maybe_fail():
     if random.random() < FAILURE_RATE:
         raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
 
+async def ensure_image_delivery_columns(conn):
+    result = await conn.execute(text("PRAGMA table_info(images)"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    delivery_columns = {
+        "width": "ALTER TABLE images ADD COLUMN width INTEGER",
+        "height": "ALTER TABLE images ADD COLUMN height INTEGER",
+        "thumbnail_url": "ALTER TABLE images ADD COLUMN thumbnail_url VARCHAR",
+        "thumbnail_2x_url": "ALTER TABLE images ADD COLUMN thumbnail_2x_url VARCHAR",
+    }
+
+    for column_name, statement in delivery_columns.items():
+        if column_name not in existing_columns:
+            await conn.execute(text(statement))
+
+def get_dimensions_from_url(url: str) -> tuple[int, int]:
+    query_params = dict(parse_qsl(urlparse(url).query))
+
+    try:
+        width = int(query_params.get("w", "0"))
+        height = int(query_params.get("h", "0"))
+    except ValueError:
+        return CARD_THUMBNAIL_WIDTH, 300
+
+    if width <= 0 or height <= 0:
+        return CARD_THUMBNAIL_WIDTH, 300
+
+    return width, height
+
+def build_remote_thumbnail_url(original_url: str, target_width: int) -> str:
+    original_width, original_height = get_dimensions_from_url(original_url)
+    target_height = max(1, round(target_width * original_height / original_width))
+    parsed_url = urlparse(original_url)
+    query_params = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+    query_params.update(
+        {
+            "w": str(target_width),
+            "h": str(target_height),
+            "fit": query_params.get("fit", "crop"),
+            "q": "80",
+            "auto": "format",
+        }
+    )
+
+    return urlunparse(parsed_url._replace(query=urlencode(query_params)))
+
+def get_local_upload_path(url: str, *, allow_thumbnails: bool = False) -> Optional[Path]:
+    parsed_url = urlparse(url)
+    if not parsed_url.path.startswith("/uploads/"):
+        return None
+
+    relative_path = Path(parsed_url.path.removeprefix("/uploads/"))
+    if (
+        not relative_path.parts
+        or relative_path.is_absolute()
+        or ".." in relative_path.parts
+        or (relative_path.parts[0] == "thumbnails" and not allow_thumbnails)
+    ):
+        return None
+
+    return UPLOAD_DIR / relative_path
+
+def build_upload_url(path: Path) -> str:
+    return f"{API_BASE_URL}/uploads/{path.relative_to(UPLOAD_DIR).as_posix()}"
+
+def get_image_dimensions_from_file(file_path: Path) -> tuple[int, int]:
+    with PILImage.open(file_path) as image:
+        image = ImageOps.exif_transpose(image)
+        return image.size
+
+def normalize_thumbnail_image(image: PILImage.Image) -> PILImage.Image:
+    if image.mode in ("RGB", "RGBA"):
+        return image
+
+    has_alpha = "A" in image.getbands()
+    return image.convert("RGBA" if has_alpha else "RGB")
+
+def create_thumbnail(file_path: Path, image: PILImage.Image, target_width: int) -> Path:
+    target_variant_width = min(target_width, image.width)
+    target_variant_height = max(1, round(target_variant_width * image.height / image.width))
+    thumbnail = image.resize(
+        (target_variant_width, target_variant_height),
+        PILImage.Resampling.LANCZOS,
+    )
+    thumbnail = normalize_thumbnail_image(thumbnail)
+    thumbnail_path = THUMBNAIL_DIR / f"{file_path.stem}-{target_width}.webp"
+    thumbnail.save(thumbnail_path, "WEBP", quality=THUMBNAIL_QUALITY, method=6)
+    return thumbnail_path
+
+def create_thumbnail_variants(file_path: Path) -> tuple[int, int, str, str]:
+    with PILImage.open(file_path) as source_image:
+        source_image = ImageOps.exif_transpose(source_image)
+        width, height = source_image.size
+        thumbnail_path = create_thumbnail(file_path, source_image, CARD_THUMBNAIL_WIDTH)
+        thumbnail_2x_path = create_thumbnail(file_path, source_image, HIGH_DENSITY_THUMBNAIL_WIDTH)
+
+    return (
+        width,
+        height,
+        build_upload_url(thumbnail_path),
+        build_upload_url(thumbnail_2x_path),
+    )
+
+def serialize_image(image: Image) -> dict:
+    original_url = image.url
+    local_upload_path = get_local_upload_path(original_url)
+
+    if image.width and image.height:
+        width, height = image.width, image.height
+    elif local_upload_path and local_upload_path.exists():
+        width, height = get_image_dimensions_from_file(local_upload_path)
+    else:
+        width, height = get_dimensions_from_url(original_url)
+
+    if image.thumbnail_url:
+        thumbnail_url = image.thumbnail_url
+    elif local_upload_path:
+        thumbnail_url = original_url
+    else:
+        thumbnail_url = build_remote_thumbnail_url(original_url, CARD_THUMBNAIL_WIDTH)
+
+    if image.thumbnail_2x_url:
+        thumbnail_2x_url = image.thumbnail_2x_url
+    elif local_upload_path:
+        thumbnail_2x_url = None
+    else:
+        thumbnail_2x_url = build_remote_thumbnail_url(original_url, HIGH_DENSITY_THUMBNAIL_WIDTH)
+
+    return {
+        "id": image.id,
+        "created_at": image.created_at,
+        "title": image.title,
+        "user": image.user,
+        "url": original_url,
+        "original_url": original_url,
+        "thumbnail_url": thumbnail_url,
+        "thumbnail_2x_url": thumbnail_2x_url,
+        "width": width,
+        "height": height,
+        "placeholder_hash": None,
+        "placeholder_type": None,
+    }
+
 @app.on_event("startup")
 async def on_startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_image_delivery_columns(conn)
     # Insert fake data if table is empty
     async with SessionLocal() as db:
         result = await db.execute(select(Image))
@@ -203,7 +370,18 @@ async def on_startup():
                 # Cycle through different aspect ratios
                 aspect_params, _ = aspect_ratios[i % len(aspect_ratios)]
                 url = f"https://images.unsplash.com/{photo_id}?{aspect_params}&fit=crop&q=100"
-                fake_images.append(Image(title=f"{title} #{i+1}", user=user, url=url))
+                width, height = get_dimensions_from_url(url)
+                fake_images.append(
+                    Image(
+                        title=f"{title} #{i+1}",
+                        user=user,
+                        url=url,
+                        width=width,
+                        height=height,
+                        thumbnail_url=build_remote_thumbnail_url(url, CARD_THUMBNAIL_WIDTH),
+                        thumbnail_2x_url=build_remote_thumbnail_url(url, HIGH_DENSITY_THUMBNAIL_WIDTH),
+                    )
+                )
 
             db.add_all(fake_images)
             await db.commit()
@@ -215,11 +393,25 @@ def read_root():
 @app.post("/images/", response_model=ImageRead)
 async def create_image(image: ImageCreate, db: AsyncSession = Depends(get_db)):
     maybe_fail()
-    db_image = Image(**image.dict())
+    width = image.width
+    height = image.height
+
+    if not width or not height:
+        width, height = get_dimensions_from_url(image.url)
+
+    db_image = Image(
+        title=image.title,
+        user=image.user,
+        url=image.url,
+        width=width,
+        height=height,
+        thumbnail_url=build_remote_thumbnail_url(image.url, CARD_THUMBNAIL_WIDTH),
+        thumbnail_2x_url=build_remote_thumbnail_url(image.url, HIGH_DENSITY_THUMBNAIL_WIDTH),
+    )
     db.add(db_image)
     await db.commit()
     await db.refresh(db_image)
-    return db_image
+    return serialize_image(db_image)
 
 @app.post("/images/upload", response_model=ImageRead)
 async def upload_image(
@@ -248,6 +440,12 @@ async def upload_image(
     with open(file_path, "wb") as f:
         f.write(contents)
 
+    try:
+        width, height, thumbnail_url, thumbnail_2x_url = create_thumbnail_variants(file_path)
+    except UnidentifiedImageError:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.")
+
     # Auto-generate title from filename if not provided
     if not title:
         original_name = Path(file.filename).stem if file.filename else "Untitled"
@@ -255,18 +453,40 @@ async def upload_image(
         title = original_name.replace("_", " ").replace("-", " ").title()
 
     # Create database record
-    url = f"http://localhost:8000/uploads/{filename}"
-    db_image = Image(title=title, user=user or "Anonymous", url=url)
+    url = f"{API_BASE_URL}/uploads/{filename}"
+    db_image = Image(
+        title=title,
+        user=user or "Anonymous",
+        url=url,
+        width=width,
+        height=height,
+        thumbnail_url=thumbnail_url,
+        thumbnail_2x_url=thumbnail_2x_url,
+    )
     db.add(db_image)
     await db.commit()
     await db.refresh(db_image)
-    return db_image
+    return serialize_image(db_image)
 
-@app.get("/images/", response_model=List[ImageRead])
-async def list_images(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Image).order_by(Image.created_at.desc()))
+@app.get("/images/", response_model=ImagePage)
+async def list_images(
+    limit: int = Query(50, ge=1, le=100),
+    cursor: Optional[int] = Query(None, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
+    statement = select(Image).order_by(Image.id.desc()).limit(limit + 1)
+    if cursor:
+        statement = statement.where(Image.id < cursor)
+
+    result = await db.execute(statement)
     images = result.scalars().all()
-    return images
+    page_items = images[:limit]
+    next_cursor = page_items[-1].id if len(images) > limit and page_items else None
+
+    return {
+        "items": [serialize_image(image) for image in page_items],
+        "next_cursor": next_cursor,
+    }
 
 @app.get("/images/{image_id}", response_model=ImageRead)
 async def get_image(image_id: int, db: AsyncSession = Depends(get_db)):
@@ -274,7 +494,7 @@ async def get_image(image_id: int, db: AsyncSession = Depends(get_db)):
     image = result.scalar_one_or_none()
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
-    return image
+    return serialize_image(image)
 
 @app.delete("/images/{image_id}", status_code=204)
 async def delete_image(image_id: int, db: AsyncSession = Depends(get_db)):
@@ -282,6 +502,17 @@ async def delete_image(image_id: int, db: AsyncSession = Depends(get_db)):
     image = result.scalar_one_or_none()
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
+    local_upload_path = get_local_upload_path(image.url)
+    if local_upload_path:
+        local_upload_path.unlink(missing_ok=True)
+        if image.thumbnail_url:
+            thumbnail_path = get_local_upload_path(image.thumbnail_url, allow_thumbnails=True)
+            if thumbnail_path:
+                thumbnail_path.unlink(missing_ok=True)
+        if image.thumbnail_2x_url:
+            thumbnail_2x_path = get_local_upload_path(image.thumbnail_2x_url, allow_thumbnails=True)
+            if thumbnail_2x_path:
+                thumbnail_2x_path.unlink(missing_ok=True)
     await db.delete(image)
     await db.commit()
     return None

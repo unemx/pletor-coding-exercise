@@ -1,7 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback } from 'react'
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { deleteImage as deleteImageRequest, fetchImages } from '../../../lib/api/images'
 import { queryKeys } from '../../../lib/queryKeys'
-import type { Image } from '../../../types/image'
+import type { Image, ImagePage } from '../../../types/image'
+
+type ImagesInfiniteData = InfiniteData<ImagePage, number | undefined>
 
 const toError = (error: unknown, fallbackMessage: string) => {
   if (!error) {
@@ -14,9 +22,11 @@ const toError = (error: unknown, fallbackMessage: string) => {
 export const useImages = () => {
   const queryClient = useQueryClient()
 
-  const imagesQuery = useQuery({
+  const imagesQuery = useInfiniteQuery({
     queryKey: queryKeys.images,
-    queryFn: fetchImages,
+    queryFn: ({ pageParam }) => fetchImages({ cursor: pageParam }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   })
 
   const deleteImageMutation = useMutation({
@@ -24,14 +34,20 @@ export const useImages = () => {
     onMutate: async (deletedImageId) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.images })
 
-      const previousImages = queryClient.getQueryData<Image[]>(queryKeys.images)
+      const previousImages = queryClient.getQueryData<ImagesInfiniteData>(queryKeys.images)
 
-      queryClient.setQueryData<Image[]>(queryKeys.images, (images) => {
-        if (!images) {
-          return images
+      queryClient.setQueryData<ImagesInfiniteData>(queryKeys.images, (data) => {
+        if (!data) {
+          return data
         }
 
-        return images.filter((image) => image.id !== deletedImageId)
+        return {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: page.items.filter((image) => image.id !== deletedImageId),
+          })),
+        }
       })
 
       return { previousImages }
@@ -49,24 +65,36 @@ export const useImages = () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.images })
   }
 
-  const handleDeleteImage = (id: string) => {
+  const loadMoreImages = useCallback(async () => {
+    if (!imagesQuery.hasNextPage || imagesQuery.isFetchingNextPage) {
+      return
+    }
+
+    await imagesQuery.fetchNextPage()
+  }, [imagesQuery])
+
+  const handleDeleteImage = (id: number) => {
     deleteImageMutation.mutate(id)
   }
 
   const deletingId =
-    deleteImageMutation.isPending && typeof deleteImageMutation.variables === 'string'
+    deleteImageMutation.isPending && typeof deleteImageMutation.variables === 'number'
       ? deleteImageMutation.variables
       : null
   const error =
     toError(imagesQuery.error, 'Failed to fetch images') ??
     toError(deleteImageMutation.error, 'Delete failed')
+  const images: Image[] = imagesQuery.data?.pages.flatMap((page) => page.items) ?? []
 
   return {
-    images: imagesQuery.data ?? [],
+    images,
     loading: imagesQuery.isPending,
     error,
     deletingId,
+    hasNextPage: imagesQuery.hasNextPage,
+    loadingMore: imagesQuery.isFetchingNextPage,
     refreshImages,
+    loadMoreImages,
     deleteImage: handleDeleteImage,
   }
 }

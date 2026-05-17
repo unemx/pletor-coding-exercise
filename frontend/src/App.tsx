@@ -11,6 +11,9 @@ const App = () => {
     loading,
     error: galleryError,
     deletingId,
+    hasNextPage,
+    loadingMore,
+    loadMoreImages,
     deleteImage,
   } = useImages();
   const {
@@ -62,6 +65,9 @@ const App = () => {
         images={images}
         loading={loading}
         deletingId={deletingId}
+        hasNextPage={hasNextPage}
+        loadingMore={loadingMore}
+        onLoadMore={loadMoreImages}
         onDeleteImage={deleteImage}
       />
     </div>
