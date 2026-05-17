@@ -1,51 +1,69 @@
-import { useCallback, useEffect, useState } from 'react'
-import { deleteImage, fetchImages } from '../../../lib/api/images'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { deleteImage as deleteImageRequest, fetchImages } from '../../../lib/api/images'
+import { queryKeys } from '../../../lib/queryKeys'
 import type { Image } from '../../../types/image'
 
 const toError = (error: unknown, fallbackMessage: string) => {
+  if (!error) {
+    return null
+  }
+
   return error instanceof Error ? error : new Error(fallbackMessage)
 }
 
 export const useImages = () => {
-  const [images, setImages] = useState<Image[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<Error | null>(null)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
-  const refreshImages = useCallback(async () => {
-    setLoading(true)
+  const imagesQuery = useQuery({
+    queryKey: queryKeys.images,
+    queryFn: fetchImages,
+  })
 
-    try {
-      setImages(await fetchImages())
-      setError(null)
-    } catch (error) {
-      setError(toError(error, 'Failed to fetch images'))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const deleteImageMutation = useMutation({
+    mutationFn: deleteImageRequest,
+    onMutate: async (deletedImageId) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.images })
 
-  useEffect(() => {
-    refreshImages()
-  }, [refreshImages])
+      const previousImages = queryClient.getQueryData<Image[]>(queryKeys.images)
 
-  const handleDeleteImage = async (id: string) => {
-    setError(null)
-    setDeletingId(id)
+      queryClient.setQueryData<Image[]>(queryKeys.images, (images) => {
+        if (!images) {
+          return images
+        }
 
-    try {
-      await deleteImage(id)
-      await refreshImages()
-    } catch (error) {
-      setError(toError(error, 'Delete failed'))
-    } finally {
-      setDeletingId(null)
-    }
+        return images.filter((image) => image.id !== deletedImageId)
+      })
+
+      return { previousImages }
+    },
+    onError: (_error, _deletedImageId, context) => {
+      if (!context?.previousImages) {
+        return
+      }
+
+      queryClient.setQueryData(queryKeys.images, context.previousImages)
+    },
+  })
+
+  const refreshImages = async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.images })
   }
 
+  const handleDeleteImage = (id: string) => {
+    deleteImageMutation.mutate(id)
+  }
+
+  const deletingId =
+    deleteImageMutation.isPending && typeof deleteImageMutation.variables === 'string'
+      ? deleteImageMutation.variables
+      : null
+  const error =
+    toError(imagesQuery.error, 'Failed to fetch images') ??
+    toError(deleteImageMutation.error, 'Delete failed')
+
   return {
-    images,
-    loading,
+    images: imagesQuery.data ?? [],
+    loading: imagesQuery.isPending,
     error,
     deletingId,
     refreshImages,

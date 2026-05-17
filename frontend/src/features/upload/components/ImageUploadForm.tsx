@@ -3,15 +3,15 @@ import { useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, FormEvent } from 'react'
 
 interface ImageUploadFormProps {
+  isUploading: boolean
   onUpload: (file: File) => Promise<void>
   onUploadError: (error: Error) => void
 }
 
-export const ImageUploadForm = ({ onUpload, onUploadError }: ImageUploadFormProps) => {
+export const ImageUploadForm = ({ isUploading, onUpload, onUploadError }: ImageUploadFormProps) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileSelect = (file: File) => {
@@ -70,15 +70,11 @@ export const ImageUploadForm = ({ onUpload, onUploadError }: ImageUploadFormProp
       return
     }
 
-    setSubmitting(true)
-
     try {
       await onUpload(selectedFile)
       handleClearSelectedFile()
     } catch (error) {
       onUploadError(error instanceof Error ? error : new Error('Upload failed'))
-    } finally {
-      setSubmitting(false)
     }
   }
 
@@ -179,21 +175,21 @@ export const ImageUploadForm = ({ onUpload, onUploadError }: ImageUploadFormProp
 
         <button
           type="submit"
-          disabled={submitting || !selectedFile}
+          disabled={isUploading || !selectedFile}
           style={{
             marginTop: 16,
             padding: '12px 24px',
             borderRadius: 6,
-            background: submitting || !selectedFile ? '#ccc' : '#222',
+            background: isUploading || !selectedFile ? '#ccc' : '#222',
             color: 'white',
             fontWeight: 600,
             border: 'none',
-            cursor: submitting || !selectedFile ? 'not-allowed' : 'pointer',
+            cursor: isUploading || !selectedFile ? 'not-allowed' : 'pointer',
             fontSize: 14,
             width: '100%',
           }}
         >
-          {submitting ? 'Uploading...' : 'Upload Image'}
+          {isUploading ? 'Uploading...' : 'Upload Image'}
         </button>
       </form>
     </div>

@@ -12,17 +12,15 @@ const App = () => {
     loading,
     error: galleryError,
     deletingId,
-    refreshImages,
     deleteImage,
   } = useImages();
   const {
     error: uploadError,
     showSuccess,
+    uploading,
     upload,
     handleUploadError,
-  } = useImageUpload({
-    onUploadSuccess: refreshImages,
-  });
+  } = useImageUpload();
   const error = uploadError ?? galleryError;
 
   return (
@@ -46,7 +44,11 @@ const App = () => {
         Image Gallery
       </h1>
 
-      <ImageUploadForm onUpload={upload} onUploadError={handleUploadError} />
+      <ImageUploadForm
+        isUploading={uploading}
+        onUpload={upload}
+        onUploadError={handleUploadError}
+      />
 
       {showSuccess && (
         <StatusMessage variant="success">

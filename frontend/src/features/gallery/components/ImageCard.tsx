@@ -1,5 +1,4 @@
 import * as React from 'react'
-import type { SyntheticEvent } from 'react'
 import type { Image } from '../../../types/image'
 
 interface ImageCardProps {
@@ -9,12 +8,18 @@ interface ImageCardProps {
 }
 
 export const ImageCard = ({ image, isDeleting, onDelete }: ImageCardProps) => {
+  const [hasImageError, setHasImageError] = React.useState(false)
+
+  React.useEffect(() => {
+    setHasImageError(false)
+  }, [image.url])
+
   const handleDelete = () => {
     onDelete(image.id)
   }
 
-  const handleImageError = (event: SyntheticEvent<HTMLImageElement>) => {
-    event.currentTarget.src = 'https://via.placeholder.com/400x300?text=Error'
+  const handleImageError = () => {
+    setHasImageError(true)
   }
 
   return (
@@ -56,14 +61,37 @@ export const ImageCard = ({ image, isDeleting, onDelete }: ImageCardProps) => {
       >
         &times;
       </button>
-      <img
-        src={image.url}
-        alt={image.title}
-        loading="eager"
-        decoding="sync"
-        style={{ width: 400, height: 300, objectFit: 'cover', display: 'block' }}
-        onError={handleImageError}
-      />
+      {hasImageError ? (
+        <div
+          role="img"
+          aria-label={`Unable to load ${image.title}`}
+          style={{
+            width: 400,
+            height: 300,
+            background: '#f1f3f5',
+            color: '#666',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+            boxSizing: 'border-box',
+            textAlign: 'center',
+            fontSize: 14,
+            fontWeight: 500,
+          }}
+        >
+          Image unavailable
+        </div>
+      ) : (
+        <img
+          src={image.url}
+          alt={image.title}
+          loading="eager"
+          decoding="sync"
+          style={{ width: 400, height: 300, objectFit: 'cover', display: 'block' }}
+          onError={handleImageError}
+        />
+      )}
       <div style={{ padding: 8 }}>
         <p
           style={{

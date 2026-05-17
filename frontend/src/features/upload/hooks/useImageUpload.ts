@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { uploadImage } from '../../../lib/api/images'
+import { queryKeys } from '../../../lib/queryKeys'
 
 const SUCCESS_MESSAGE_VISIBLE_MS = 3000
 
-interface UseImageUploadOptions {
-  onUploadSuccess: () => Promise<void> | void
+const toError = (error: unknown, fallbackMessage: string) => {
+  return error instanceof Error ? error : new Error(fallbackMessage)
 }
 
-export const useImageUpload = ({ onUploadSuccess }: UseImageUploadOptions) => {
+export const useImageUpload = () => {
+  const queryClient = useQueryClient()
   const [error, setError] = useState<Error | null>(null)
   const [showSuccess, setShowSuccess] = useState(false)
 
@@ -25,20 +28,34 @@ export const useImageUpload = ({ onUploadSuccess }: UseImageUploadOptions) => {
     }
   }, [showSuccess])
 
+  const uploadImageMutation = useMutation({
+    mutationFn: uploadImage,
+    onMutate: () => {
+      setError(null)
+      setShowSuccess(false)
+    },
+    onSuccess: async () => {
+      setShowSuccess(true)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.images })
+    },
+    onError: (error) => {
+      setError(toError(error, 'Upload failed'))
+    },
+  })
+
   const upload = async (file: File) => {
-    setError(null)
-    await uploadImage(file)
-    setShowSuccess(true)
-    await onUploadSuccess()
+    await uploadImageMutation.mutateAsync(file)
   }
 
   const handleUploadError = (error: Error) => {
+    setShowSuccess(false)
     setError(error)
   }
 
   return {
     error,
     showSuccess,
+    uploading: uploadImageMutation.isPending,
     upload,
     handleUploadError,
   }
