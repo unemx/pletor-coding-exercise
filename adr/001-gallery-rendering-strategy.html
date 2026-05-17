@@ -123,6 +123,30 @@
           <li><strong>Fallback:</strong> if memory grows unacceptably after scrolling the full dataset, switch to <code>masonic</code> or <code>react-virtuoso</code>.</li>
         </ul>
 
+        <h2>Postmortem</h2>
+        <p>
+          The initial Slow 4G / 4x CPU measurements were misleading because they were taken against
+          Vite development mode. A DevTools trace showed the LCP image itself was not the main
+          bottleneck: the image was discovered only after roughly 11 seconds because the browser was
+          still walking the dev-server module graph, including React dev dependencies and Vite client
+          code. After measuring a production build, LCP dropped to about 3.1 seconds.
+        </p>
+        <p>
+          The useful optimizations were the ones that shortened or protected the real critical path:
+          rendering known-dimension thumbnails, eager-loading only the first visible images, using
+          <code>fetchPriority="high"</code> for those candidates, reducing the initial page size, and
+          serving LCP candidates from local cached thumbnails instead of third-party Unsplash URLs.
+          Static preload tags helped the browser discover likely first-screen thumbnails earlier, but
+          preloading too many images competed for Slow 4G bandwidth and should stay bounded.
+        </p>
+        <p>
+          We deliberately backed out inline initial-gallery JSON. It removed the API wait from first
+          render, but it added generator, hydration, cache-staleness, and HTML payload complexity for
+          a small incremental gain after production-mode measurement. For this exercise, the simpler
+          SPA plus local thumbnails and bounded preloads is the better tradeoff. A stricter
+          sub-2.5-second target would justify SSR, prerendering, or a small static first-row shell.
+        </p>
+
         <h2>Alternatives Considered</h2>
         <h3>Use a Strict Virtualization Library First</h3>
         <p>

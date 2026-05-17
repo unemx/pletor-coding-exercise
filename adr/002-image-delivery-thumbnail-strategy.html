@@ -105,6 +105,27 @@
           <li>Avoid on-demand per-request image transforms for the main gallery unless a local disk cache is implemented.</li>
         </ul>
 
+        <h2>Postmortem</h2>
+        <p>
+          Trace analysis showed that third-party image delivery was a risk but not the only LCP
+          issue. Once the app was measured in production mode, the LCP candidate was a local
+          thumbnail and loaded in well under a second; the remaining delay came mostly from when the
+          SPA discovered and rendered that image.
+        </p>
+        <p>
+          The final implementation keeps the backend-owned contract and adds a pragmatic disk cache
+          for seeded remote thumbnails under <code>/uploads/remote-thumbnails</code>. The first
+          visible records are warmed before the initial gallery response, and the rest of the page is
+          warmed in the background. Remote URLs remain the source of truth and the fallback path, so a
+          cache miss or failed upstream image does not break the gallery.
+        </p>
+        <p>
+          ThumbHash remains a perceived-performance enhancement rather than an LCP fix. It can make
+          unloaded cards feel intentional, but Chrome still reports LCP when the final image paints.
+          Similarly, a static preload manifest is useful only when kept small: over-preloading first
+          page thumbnails can compete with the actual LCP image on Slow 4G.
+        </p>
+
         <h2>Alternatives Considered</h2>
         <h3>Frontend-Only Resizing</h3>
         <p>
