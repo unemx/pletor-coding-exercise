@@ -1,197 +1,141 @@
 import * as React from 'react'
-import { useRef, useState } from 'react'
-import type { ChangeEvent, DragEvent, FormEvent } from 'react'
+import Uppy from '@uppy/core'
+import type { Meta, UppyFile, UploadResult } from '@uppy/core'
+import GoldenRetriever from '@uppy/golden-retriever'
+import Dashboard from '@uppy/react/dashboard'
+import XHRUpload from '@uppy/xhr-upload'
+import '@uppy/core/css/style.min.css'
+import '@uppy/dashboard/css/style.min.css'
+import { UPLOAD_IMAGE_URL } from '../../../lib/api/images'
+import './ImageUploadForm.css'
 
 interface ImageUploadFormProps {
-  isUploading: boolean
-  onUpload: (file: File) => Promise<void>
+  onUploadComplete: (successfulUploadCount: number) => Promise<void>
   onUploadError: (error: Error) => void
 }
 
-export const ImageUploadForm = ({ isUploading, onUpload, onUploadError }: ImageUploadFormProps) => {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+interface UploadResponseBody {
+  [key: string]: unknown
+  id?: number
+  url?: string
+}
 
-  const handleFileSelect = (file: File) => {
-    setSelectedFile(file)
+type UploadEventError = {
+  message: string
+  details?: string
+}
 
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      setPreview(reader.result as string)
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+const MAX_FILE_COUNT = 50
+const CONCURRENT_UPLOAD_LIMIT = 4
+const RECOVERY_EXPIRY_MS = 24 * 60 * 60 * 1000
+
+const allowedFileTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+
+const createUploadError = (
+  file: UppyFile<Meta, UploadResponseBody> | undefined,
+  error: UploadEventError,
+) => {
+  const prefix = file?.name ? `${file.name}: ` : ''
+  return new Error(`${prefix}${error.message}`)
+}
+
+const createImageUploader = () => {
+  return new Uppy<Meta, UploadResponseBody>({
+    id: 'pictoshare-image-uploader',
+    autoProceed: false,
+    allowMultipleUploadBatches: true,
+    restrictions: {
+      allowedFileTypes,
+      maxFileSize: MAX_FILE_SIZE_BYTES,
+      maxNumberOfFiles: MAX_FILE_COUNT,
+    },
+  })
+    .use(GoldenRetriever, {
+      expires: RECOVERY_EXPIRY_MS,
+      indexedDB: {
+        name: 'pictoshare-image-uploads',
+      },
+    })
+    .use(XHRUpload, {
+      endpoint: UPLOAD_IMAGE_URL,
+      fieldName: 'file',
+      formData: true,
+      limit: CONCURRENT_UPLOAD_LIMIT,
+      method: 'POST',
+      timeout: 45_000,
+      allowedMetaFields: [],
+      shouldRetry: (xhr) => xhr.status === 0 || xhr.status >= 500,
+    })
+}
+
+export const ImageUploadForm = ({
+  onUploadComplete,
+  onUploadError,
+}: ImageUploadFormProps) => {
+  const [uppy] = React.useState(createImageUploader)
+
+  React.useEffect(() => {
+    const handleComplete = (result: UploadResult<Meta, UploadResponseBody>) => {
+      const successfulUploadCount = result.successful?.length ?? 0
+
+      if (successfulUploadCount <= 0) {
+        return
+      }
+
+      void onUploadComplete(successfulUploadCount)
     }
-    reader.readAsDataURL(file)
-  }
 
-  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
-    event.preventDefault()
-    setIsDragging(false)
-
-    const file = event.dataTransfer.files[0]
-
-    if (file && file.type.startsWith('image/')) {
-      handleFileSelect(file)
-    }
-  }
-
-  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
-    event.preventDefault()
-    setIsDragging(true)
-  }
-
-  const handleDragLeave = (event: DragEvent<HTMLLabelElement>) => {
-    event.preventDefault()
-    setIsDragging(false)
-  }
-
-  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-
-    if (file) {
-      handleFileSelect(file)
-    }
-  }
-
-  const handleClearSelectedFile = () => {
-    setSelectedFile(null)
-    setPreview(null)
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-
-    if (!selectedFile) {
-      onUploadError(new Error('Please select an image file'))
-      return
+    const handleUploadError = (
+      file: UppyFile<Meta, UploadResponseBody> | undefined,
+      error: UploadEventError,
+    ) => {
+      onUploadError(createUploadError(file, error))
     }
 
-    try {
-      await onUpload(selectedFile)
-      handleClearSelectedFile()
-    } catch (error) {
-      onUploadError(error instanceof Error ? error : new Error('Upload failed'))
+    const handleRestrictionFailed = (
+      file: UppyFile<Meta, UploadResponseBody> | undefined,
+      error: Error,
+    ) => {
+      onUploadError(createUploadError(file, error))
     }
-  }
+
+    uppy.on('complete', handleComplete)
+    uppy.on('upload-error', handleUploadError)
+    uppy.on('restriction-failed', handleRestrictionFailed)
+
+    return () => {
+      uppy.off('complete', handleComplete)
+      uppy.off('upload-error', handleUploadError)
+      uppy.off('restriction-failed', handleRestrictionFailed)
+    }
+  }, [onUploadComplete, onUploadError, uppy])
+
+  React.useEffect(() => {
+    return () => {
+      uppy.destroy()
+    }
+  }, [uppy])
 
   return (
-    <div
-      style={{
-        background: '#f8f9fa',
-        padding: 24,
-        borderRadius: 12,
-        marginBottom: 40,
-        maxWidth: 500,
-        margin: '0 auto 40px',
-      }}
-    >
-      <h2 style={{ margin: '0 0 16px 0', fontSize: 18, fontWeight: 600 }}>Add New Image</h2>
-      <form onSubmit={handleSubmit}>
-        <label
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          style={{
-            border: isDragging ? '2px dashed #0066cc' : '2px dashed #ccc',
-            borderRadius: 8,
-            padding: 24,
-            textAlign: 'center',
-            cursor: 'pointer',
-            background: isDragging ? '#e6f0ff' : '#fff',
-            transition: 'all 0.2s ease',
-            minHeight: 120,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexDirection: 'column',
-            position: 'relative',
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/gif,image/webp"
-            onChange={handleFileInputChange}
-            aria-label="Select image to upload"
-            style={{
-              position: 'absolute',
-              width: '100%',
-              height: '100%',
-              opacity: 0,
-              cursor: 'pointer',
-            }}
-          />
-          {preview ? (
-            <div>
-              <img
-                src={preview}
-                alt="Preview"
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: 180,
-                  borderRadius: 6,
-                  pointerEvents: 'none',
-                }}
-              />
-              <p style={{ margin: '12px 0 0', fontSize: 13, color: '#333', pointerEvents: 'none' }}>
-                {selectedFile?.name}
-              </p>
-            </div>
-          ) : (
-            <>
-              <p style={{ margin: 0, color: '#666', fontSize: 14, pointerEvents: 'none' }}>
-                {isDragging ? 'Drop image here' : 'Drag & drop an image here, or click to select'}
-              </p>
-              <p style={{ margin: '4px 0 0', color: '#999', fontSize: 12, pointerEvents: 'none' }}>
-                Supports: JPEG, PNG, GIF, WebP
-              </p>
-            </>
-          )}
-        </label>
-
-        {preview && (
-          <button
-            type="button"
-            onClick={handleClearSelectedFile}
-            style={{
-              marginTop: 12,
-              fontSize: 13,
-              color: '#dc3545',
-              cursor: 'pointer',
-              textDecoration: 'underline',
-              background: 'none',
-              border: 'none',
-              padding: 0,
-              display: 'block',
-            }}
-          >
-            Remove selected image
-          </button>
-        )}
-
-        <button
-          type="submit"
-          disabled={isUploading || !selectedFile}
-          style={{
-            marginTop: 16,
-            padding: '12px 24px',
-            borderRadius: 6,
-            background: isUploading || !selectedFile ? '#ccc' : '#222',
-            color: 'white',
-            fontWeight: 600,
-            border: 'none',
-            cursor: isUploading || !selectedFile ? 'not-allowed' : 'pointer',
-            fontSize: 14,
-            width: '100%',
-          }}
-        >
-          {isUploading ? 'Uploading...' : 'Upload Image'}
-        </button>
-      </form>
-    </div>
+    <section className="image-upload-form" aria-labelledby="image-upload-title">
+      <div className="image-upload-form__header">
+        <p className="image-upload-form__eyebrow">Batch uploader</p>
+        <h2 id="image-upload-title">Add images</h2>
+        <p>
+          Drop up to {MAX_FILE_COUNT} images, upload {CONCURRENT_UPLOAD_LIMIT} at a time,
+          cancel individual files, and retry failures without restarting the batch.
+        </p>
+      </div>
+      <Dashboard
+        uppy={uppy}
+        height={420}
+        width="100%"
+        note="JPEG, PNG, GIF, or WebP. Maximum 10 MB per image."
+        proudlyDisplayPoweredByUppy={false}
+        showRemoveButtonAfterComplete
+        theme="light"
+      />
+    </section>
   )
 }

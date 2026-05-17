@@ -1,7 +1,7 @@
 import type { ImagePage } from '../../types/image'
 
 const IMAGES_URL = 'http://localhost:8000/images/'
-const UPLOAD_URL = 'http://localhost:8000/images/upload'
+export const UPLOAD_IMAGE_URL = 'http://localhost:8000/images/upload'
 const INITIAL_IMAGE_LIMIT = 24
 const NEXT_IMAGE_LIMIT = 50
 const PRIORITY_IMAGE_COUNT = 4
@@ -89,7 +89,7 @@ export const uploadImage = async (file: File): Promise<void> => {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(UPLOAD_URL, {
+  const response = await fetch(UPLOAD_IMAGE_URL, {
     method: 'POST',
     body: formData,
   })

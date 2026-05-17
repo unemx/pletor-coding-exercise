@@ -1,0 +1,56 @@
+.image-upload-form {
+  width: min(100%, 760px);
+  margin: 0 auto 40px;
+  padding: 24px;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  background: #f8f9fa;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+  text-align: left;
+}
+
+.image-upload-form__header {
+  margin-bottom: 18px;
+}
+
+.image-upload-form__eyebrow {
+  margin: 0 0 6px;
+  color: #2563eb;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.image-upload-form__header h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.4rem;
+  line-height: 1.2;
+}
+
+.image-upload-form__header p:not(.image-upload-form__eyebrow) {
+  margin: 8px 0 0;
+  color: #4b5563;
+  font-size: 0.95rem;
+}
+
+.image-upload-form .uppy-Dashboard-inner {
+  border-color: #d1d5db;
+  border-radius: 14px;
+}
+
+.image-upload-form .uppy-Dashboard-AddFiles {
+  border-radius: 14px;
+}
+
+.image-upload-form .uppy-StatusBar {
+  border-bottom-right-radius: 14px;
+  border-bottom-left-radius: 14px;
+}
+
+@media (max-width: 640px) {
+  .image-upload-form {
+    padding: 16px;
+  }
+}

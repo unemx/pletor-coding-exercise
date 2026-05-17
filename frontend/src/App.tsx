@@ -19,8 +19,8 @@ const App = () => {
   const {
     error: uploadError,
     showSuccess,
-    uploading,
-    upload,
+    successfulUploadCount,
+    handleUploadComplete,
     handleUploadError,
   } = useImageUpload();
   const error = uploadError ?? galleryError;
@@ -48,14 +48,15 @@ const App = () => {
       </h1>
 
       <ImageUploadForm
-        isUploading={uploading}
-        onUpload={upload}
+        onUploadComplete={handleUploadComplete}
         onUploadError={handleUploadError}
       />
 
       {showSuccess && (
         <StatusMessage variant="success">
-          Image added successfully!
+          {successfulUploadCount === 1
+            ? "Image uploaded successfully!"
+            : `${successfulUploadCount} images uploaded successfully!`}
         </StatusMessage>
       )}
       {error && (
