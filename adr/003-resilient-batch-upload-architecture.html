@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADR-003: Resilient Batch Upload Architecture</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="./index.html" aria-label="PictoShare ADR home">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <span>PictoShare ADRs</span>
+        </a>
+        <nav class="nav" aria-label="Architecture decision records">
+          <a href="./001-gallery-rendering-strategy.html">Rendering</a>
+          <a href="./002-image-delivery-thumbnail-strategy.html">Images</a>
+          <a href="./003-resilient-batch-upload-architecture.html">Uploads</a>
+          <a href="./004-folder-structure.html">Structure</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">ADR-003</p>
+        <h1>Resilient batch <span class="gradient-text">upload architecture.</span></h1>
+        <p class="lede">
+          Uploading a shoot should feel trustworthy: users need progress, partial failure recovery,
+          cancellation, and a responsive UI while files are in flight.
+        </p>
+      </section>
+
+      <article class="content-card">
+        <h2>Context</h2>
+        <p>
+          The MVP upload flow handles files one at a time, which does not match how creative teams
+          work after a shoot. Batch upload needs to tolerate slow networks, individual failures, and
+          user actions without blocking the rest of the application.
+        </p>
+
+        <h2>Decision</h2>
+        <div class="decision">
+          <p>
+            Use Uppy as the upload orchestration layer, configured with XHRUpload, Golden
+            Retriever, bounded concurrency, image restrictions, per-file progress, cancellation,
+            retry behavior, and the existing FastAPI upload endpoint.
+          </p>
+        </div>
+        <p>
+          The 90-minute exercise rewards production judgement over rebuilding commodity browser
+          upload mechanics. Uppy provides the queue, drag-and-drop UI, per-file lifecycle, and
+          upload progress events that <code>fetch</code> does not expose. Golden Retriever adds
+          best-effort browser-side recovery for selected files after a refresh or crash. The app
+          should still keep Uppy behind an upload feature boundary so the rest of the codebase
+          depends on our upload component rather than scattered plugin configuration.
+        </p>
+
+        <h2>Consequences</h2>
+        <ul>
+          <li><strong>Positive:</strong> mature upload behavior can be delivered inside the take-home timebox.</li>
+          <li><strong>Positive:</strong> one failed file does not invalidate the full batch.</li>
+          <li><strong>Positive:</strong> XHRUpload gives real per-file progress and cancellation against the current API.</li>
+          <li><strong>Positive:</strong> Golden Retriever can recover queued files and Uppy state after a tab refresh.</li>
+          <li><strong>Positive:</strong> concurrency limits protect both the browser and backend from avoidable pressure.</li>
+          <li><strong>Tradeoff:</strong> Uppy adds a dependency and hides some queue internals behind plugin APIs.</li>
+          <li><strong>Tradeoff:</strong> recovered in-flight uploads restart instead of resuming from the last byte with the current API.</li>
+          <li><strong>Tradeoff:</strong> production-safe retries still require idempotency keys or true resumable upload support.</li>
+        </ul>
+
+        <h2>Alternatives Considered</h2>
+        <h3>Custom Managed Queue</h3>
+        <p>
+          A custom queue would make the state machine explicit and avoid a dependency, but it spends
+          limited exercise time recreating drag-and-drop, progress, cancellation, retry, and error UI
+          that Uppy already handles well.
+        </p>
+
+        <h3>Single Request for the Whole Batch</h3>
+        <p>
+          Sending every file as one request is simpler, but progress, retry, and cancellation become
+          coarse-grained. One failure risks forcing the user to start over.
+        </p>
+
+        <h3>Unlimited Parallel Uploads</h3>
+        <p>
+          Uploading every file at once can look fast on a small local dataset, but it becomes noisy
+          and unreliable under realistic network constraints. A bounded queue is more predictable.
+        </p>
+
+        <div class="callout">
+          Golden Retriever helps satisfy the refresh-survival bonus without backend changes, but it
+          is not a substitute for resumable uploads. True byte-level resume would require a protocol
+          such as Tus or multipart uploads with matching backend support.
+        </div>
+      </article>
+
+      <nav class="footer-nav" aria-label="ADR pagination">
+        <a class="button" href="./002-image-delivery-thumbnail-strategy.html">Previous: Images</a>
+        <a class="button" href="./004-folder-structure.html">Next: Folder structure</a>
+      </nav>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADR-004: Feature-Oriented Folder Structure</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="./index.html" aria-label="PictoShare ADR home">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <span>PictoShare ADRs</span>
+        </a>
+        <nav class="nav" aria-label="Architecture decision records">
+          <a href="./001-gallery-rendering-strategy.html">Rendering</a>
+          <a href="./002-image-delivery-thumbnail-strategy.html">Images</a>
+          <a href="./003-resilient-batch-upload-architecture.html">Uploads</a>
+          <a href="./004-folder-structure.html">Structure</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">ADR-004</p>
+        <h1>Feature-oriented <span class="gradient-text">folder structure.</span></h1>
+        <p class="lede">
+          The exercise asks for production judgement, so the code should be easy to review and
+          extend without introducing a large application framework.
+        </p>
+      </section>
+
+      <article class="content-card">
+        <h2>Context</h2>
+        <p>
+          The original MVP is intentionally small, but the requested work adds distinct concerns:
+          gallery rendering, upload queue management, API access, reusable UI, and shared types.
+          Leaving everything in one file makes the result harder to reason about during review.
+        </p>
+
+        <h2>Decision</h2>
+        <div class="decision">
+          <p>
+            Organize the frontend by feature boundaries, with shared infrastructure extracted only
+            when more than one feature needs it.
+          </p>
+        </div>
+        <p>
+          Gallery-specific components, hooks, and helpers should live near the gallery feature.
+          Upload-specific queue logic should live near the upload feature. API clients, shared UI
+          primitives, and shared types should sit in common folders because they represent cross-cutting
+          contracts.
+        </p>
+
+        <h2>Target Shape</h2>
+        <ul>
+          <li><code>features/gallery</code> owns virtualized gallery UI, layout helpers, and scroll restoration.</li>
+          <li><code>features/upload</code> owns drag-and-drop UI, queue state, retry behavior, and upload controls.</li>
+          <li><code>lib/api</code> owns typed calls to the backend and keeps transport details out of components.</li>
+          <li><code>components/ui</code> contains small reusable presentational pieces used across features.</li>
+          <li><code>types</code> contains shared contracts when they are used by more than one feature.</li>
+        </ul>
+
+        <h2>Consequences</h2>
+        <ul>
+          <li><strong>Positive:</strong> reviewers can inspect gallery and upload decisions independently.</li>
+          <li><strong>Positive:</strong> stateful business logic is kept close to the UI that uses it.</li>
+          <li><strong>Positive:</strong> shared folders stay small because code is promoted there only when reused.</li>
+          <li><strong>Tradeoff:</strong> feature folders can duplicate small patterns before an abstraction is justified.</li>
+        </ul>
+
+        <h2>Alternatives Considered</h2>
+        <h3>Layer-Only Structure</h3>
+        <p>
+          Splitting everything into global <code>components</code>, <code>hooks</code>, and
+          <code>utils</code> folders is familiar, but it hides ownership as the app grows.
+        </p>
+
+        <h3>Full Domain Architecture</h3>
+        <p>
+          A stricter domain architecture would be excessive for a take-home. The selected structure
+          keeps clear boundaries without making simple changes feel ceremonial.
+        </p>
+      </article>
+
+      <nav class="footer-nav" aria-label="ADR pagination">
+        <a class="button" href="./003-resilient-batch-upload-architecture.html">Previous: Uploads</a>
+        <a class="button" href="./index.html">Back to all ADRs</a>
+      </nav>
+    </main>
+  </body>
+</html>

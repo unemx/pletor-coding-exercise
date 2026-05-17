@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADR-001: Gallery Rendering Strategy</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="./index.html" aria-label="PictoShare ADR home">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <span>PictoShare ADRs</span>
+        </a>
+        <nav class="nav" aria-label="Architecture decision records">
+          <a href="./001-gallery-rendering-strategy.html">Rendering</a>
+          <a href="./002-image-delivery-thumbnail-strategy.html">Images</a>
+          <a href="./003-resilient-batch-upload-architecture.html">Uploads</a>
+          <a href="./004-folder-structure.html">Structure</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">ADR-001</p>
+        <h1>Gallery <span class="gradient-text">rendering strategy.</span></h1>
+        <p class="lede">
+          The gallery must stay smooth with thousands of mixed-ratio images, including on a slow
+          network and under CPU throttling.
+        </p>
+      </section>
+
+      <article class="content-card">
+        <h2>Context</h2>
+        <p>
+          The seeded database contains around 2000 images with mixed aspect ratios. Rendering every
+          image in the DOM creates unnecessary layout work, memory pressure, network contention, and
+          janky scrolling. A fixed-size grid would be simpler, but it would crop or distort the
+          visual rhythm of the gallery and would not match the product expectation for creative
+          assets.
+        </p>
+
+        <h2>Decision</h2>
+        <div class="decision">
+          <p>
+            Use <code>react-photo-album</code> as the first implementation choice for a
+            responsive mixed-ratio gallery, defaulting to its justified rows layout and pairing it
+            with paginated thumbnail delivery.
+          </p>
+        </div>
+        <p>
+          The main risk in this exercise is not writing card markup; it is getting mixed aspect
+          ratios, responsive sizing, stable image boxes, and scroll behavior right inside a short
+          implementation window. A focused photo-layout library is safer than hand-rolling justified
+          row math or wiring a low-level virtualizer from scratch.
+        </p>
+        <p>
+          The gallery should use known image dimensions, thumbnail URLs, and responsive
+          <code>srcset</code>/<code>sizes</code> data from the API. Cards keep stable dimensions
+          before the asset loads, so scrolling does not trigger cumulative layout shift. Scroll
+          restoration is treated as part of the gallery state rather than a side effect of browser
+          history.
+        </p>
+
+        <h2>Library Comparison</h2>
+        <div class="table-wrap" role="region" aria-label="Gallery rendering library comparison" tabindex="0">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Option</th>
+                <th scope="col">Strengths</th>
+                <th scope="col">Risks</th>
+                <th scope="col">Fit for this exercise</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row"><code>react-photo-album</code></th>
+                <td>Purpose-built for responsive photo galleries, supports rows, masonry, dimensions, responsive images, and infinite scroll helpers.</td>
+                <td>Its offscreen optimization is not the same as strict DOM virtualization, so memory must be verified with profiling.</td>
+                <td><strong>Chosen.</strong> Best balance of visual quality, implementation speed, and explainable tradeoffs for a 90-minute test.</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>masonic</code></th>
+                <td>Purpose-built virtualized masonry with strong large-list behavior.</td>
+                <td>Masonry is less predictable for scroll restoration and row-level layout stability than justified rows.</td>
+                <td>Good fallback if profiling proves strict virtualization matters more than justified layout quality.</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>react-virtuoso</code></th>
+                <td>Mature virtualization primitives with dynamic height support and good ergonomics.</td>
+                <td>More generic; still requires custom gallery layout work for a polished mixed-ratio photo grid.</td>
+                <td>Strong fallback for list/grid virtualization, but less directly aligned with the visual gallery requirement.</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>@tanstack/react-virtual</code></th>
+                <td>Excellent low-level virtualizer with high control and small surface area.</td>
+                <td>Requires more custom measurement, layout, and restoration code.</td>
+                <td>Too low-level for the available time unless the library choices above fail.</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>react-window</code></th>
+                <td>Small, familiar, and effective for fixed-size or simple variable-size lists.</td>
+                <td>Awkward for responsive mixed-height gallery layouts and no longer the strongest default choice.</td>
+                <td>Not selected because it pushes too much gallery-specific complexity into app code.</td>
+              </tr>
+              <tr>
+                <th scope="row">Custom implementation</th>
+                <td>Maximum control over row computation, overscan, and restoration.</td>
+                <td>Highest delivery risk; easy to under-build measurement, resize, and edge-case behavior.</td>
+                <td>Rejected for this test. The time is better spent integrating thumbnails, metadata, and measurement.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2>Consequences</h2>
+        <ul>
+          <li><strong>Positive:</strong> layout quality comes from a library designed specifically for photo galleries.</li>
+          <li><strong>Positive:</strong> implementation time stays focused on API metadata, thumbnails, scroll restoration, and measurement.</li>
+          <li><strong>Positive:</strong> justified rows give a polished mixed-ratio layout without cropping every asset into a fixed card.</li>
+          <li><strong>Tradeoff:</strong> the selected library must be profiled because offscreen optimization may not provide strict DOM bounds.</li>
+          <li><strong>Fallback:</strong> if memory grows unacceptably after scrolling the full dataset, switch to <code>masonic</code> or <code>react-virtuoso</code>.</li>
+        </ul>
+
+        <h2>Alternatives Considered</h2>
+        <h3>Use a Strict Virtualization Library First</h3>
+        <p>
+          Libraries such as <code>masonic</code>, <code>react-virtuoso</code>, and
+          <code>@tanstack/react-virtual</code> provide stronger virtualization guarantees, but they
+          leave more layout responsibility in the application. They are better fallback choices than
+          first choices for a short exercise where visual layout quality is also a core requirement.
+        </p>
+
+        <h3>Render the Full List</h3>
+        <p>
+          This is the simplest implementation, but it fails the core performance requirement and
+          does not leave enough headroom for larger customer workspaces.
+        </p>
+
+        <h3>Use a Fixed-Size Grid</h3>
+        <p>
+          A fixed grid is easier to virtualize, but it ignores the mixed aspect ratios that matter
+          in a visual product. It would make the demo feel less like a production gallery.
+        </p>
+      </article>
+
+      <nav class="footer-nav" aria-label="ADR pagination">
+        <a class="button" href="./index.html">Back to all ADRs</a>
+        <a class="button" href="./002-image-delivery-thumbnail-strategy.html">Next: Image delivery</a>
+      </nav>
+    </main>
+  </body>
+</html>

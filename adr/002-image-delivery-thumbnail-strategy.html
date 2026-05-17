@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADR-002: Image Delivery and Thumbnail Strategy</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="./index.html" aria-label="PictoShare ADR home">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <span>PictoShare ADRs</span>
+        </a>
+        <nav class="nav" aria-label="Architecture decision records">
+          <a href="./001-gallery-rendering-strategy.html">Rendering</a>
+          <a href="./002-image-delivery-thumbnail-strategy.html">Images</a>
+          <a href="./003-resilient-batch-upload-architecture.html">Uploads</a>
+          <a href="./004-folder-structure.html">Structure</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">ADR-002</p>
+        <h1>Image delivery and <span class="gradient-text">thumbnail strategy.</span></h1>
+        <p class="lede">
+          Gallery cards should receive images sized for their rendered dimensions, not the original
+          high-resolution uploads.
+        </p>
+      </section>
+
+      <article class="content-card">
+        <h2>Context</h2>
+        <p>
+          Loading a 4000px original image into a small card wastes bandwidth, delays the largest
+          visible images, and makes Slow 4G testing look worse than the actual UI needs to be. The
+          gallery needs a predictable way to request assets that match display size and density.
+        </p>
+        <p>
+          The current dataset also changes the shape of the decision. Seeded images are already
+          delivered from Unsplash-style URLs that support width, height, crop, quality, and format
+          parameters. User uploads, however, are stored as local static files. Treating both sources
+          as if FastAPI should proxy every thumbnail would add a hot image-serving path that is too
+          expensive for a 90-minute, zero-budget exercise and would duplicate work the existing
+          remote image URLs can already do.
+        </p>
+        <p>
+          Thumbnail URLs also do not remove the need for paginated metadata. Returning 2000 image
+          records at once is manageable in a demo, but it scales poorly and competes with rendering
+          work during the initial load. The delivery contract should let the gallery request images
+          incrementally as the user scrolls.
+        </p>
+
+        <h2>Decision</h2>
+        <div class="decision">
+          <p>
+            Use a zero-budget paginated thumbnail strategy: expose a backend-owned image delivery
+            contract with cursored metadata, original URLs, thumbnail URLs, intrinsic dimensions,
+            and optional low-quality placeholders, while avoiding extra infrastructure or uncached
+            per-request transforms.
+          </p>
+        </div>
+        <p>
+          Gallery metadata should expose intrinsic <code>width</code>, <code>height</code>,
+          <code>original_url</code>, a card-sized <code>thumbnail_url</code>, and optionally a
+          <code>placeholder_hash</code> with a <code>placeholder_type</code> such as
+          <code>thumbhash</code> or <code>blurhash</code>. For seeded remote images, the API can
+          derive thumbnail URLs by adjusting the existing width, height, crop, quality, and format
+          parameters instead of proxying the image. For local uploads, the backend should inspect the
+          original dimensions and persist a small bounded thumbnail variant during upload. Original
+          assets remain the source of truth, while thumbnails are optimized delivery artifacts.
+        </p>
+        <p>
+          The frontend should render the thumbnail URL in gallery cards, provide <code>srcset</code>
+          and <code>sizes</code> when multiple densities are available, and reserve aspect-ratio
+          space from the returned dimensions before the image loads. When a placeholder hash exists,
+          the card can show a ThumbHash or BlurHash preview while the thumbnail loads; this improves
+          perceived quality but does not replace the thumbnail. Full-size views can still use the
+          original URL.
+        </p>
+
+        <h2>Consequences</h2>
+        <ul>
+          <li><strong>Positive:</strong> fewer bytes are downloaded during initial gallery rendering.</li>
+          <li><strong>Positive:</strong> LCP improves because visible images are closer to their display size.</li>
+          <li><strong>Positive:</strong> thumbnails reduce memory pressure when scrolling a large collection.</li>
+          <li><strong>Positive:</strong> dimensions in the API contract let the layout avoid post-load shifts.</li>
+          <li><strong>Positive:</strong> pagination keeps initial metadata, reconciliation, and render work bounded.</li>
+          <li><strong>Positive:</strong> ThumbHash or BlurHash placeholders make lazy-loaded cards feel intentional instead of blank.</li>
+          <li><strong>Positive:</strong> the plan fits the exercise constraints without buying or configuring extra infrastructure.</li>
+          <li><strong>Tradeoff:</strong> uploaded files need dimension extraction and thumbnail generation at ingest time, ideally with a small library such as Pillow.</li>
+          <li><strong>Tradeoff:</strong> placeholder hashes need generation and decoding code, so they should remain secondary to dimensions and thumbnails.</li>
+          <li><strong>Tradeoff:</strong> the image schema needs to distinguish original delivery URLs from optimized gallery URLs.</li>
+        </ul>
+
+        <h2>Implementation Notes</h2>
+        <ul>
+          <li>Change the list endpoint from returning every image to a paginated response, such as <code>GET /images?limit=50&amp;cursor=...</code> with a stable <code>next_cursor</code>.</li>
+          <li>Store or return <code>width</code> and <code>height</code> for every image record.</li>
+          <li>Return both <code>original_url</code> and <code>thumbnail_url</code> from the gallery API.</li>
+          <li>For seeded remote images, derive thumbnail URLs from known URL parameters such as width, height, crop, format, and quality.</li>
+          <li>For uploaded local files, generate a narrow set of persisted variants, such as a 400px card thumbnail and an 800px high-density thumbnail.</li>
+          <li>Prefer ThumbHash for uploaded-image placeholders if a small implementation is available; otherwise use BlurHash or fall back to a neutral skeleton. Do not block the thumbnail work on placeholders.</li>
+          <li>Avoid on-demand per-request image transforms for the main gallery unless a local disk cache is implemented.</li>
+        </ul>
+
+        <h2>Alternatives Considered</h2>
+        <h3>Frontend-Only Resizing</h3>
+        <p>
+          CSS can make an original image look smaller, but it cannot avoid downloading and decoding
+          the oversized asset. This does not solve the performance bottleneck.
+        </p>
+
+        <h3>Backend Transform Proxy for Every Image</h3>
+        <p>
+          A single <code>/thumbnail</code> endpoint is tempting because it hides provider details from
+          the frontend. In this codebase it would make FastAPI responsible for downloading, decoding,
+          resizing, encoding, caching, and streaming every visible gallery image. Without a
+          persistent transform cache, that shifts the bottleneck from the browser to the API and is
+          worse than using the existing upstream image service for seeded assets.
+        </p>
+
+        <h3>Use Upstream Image Parameters Only</h3>
+        <p>
+          This is efficient for the seeded dataset because those images already support size and
+          quality parameters. It is incomplete for user uploads, which are local static files and
+          need dimensions plus generated variants to avoid regressing after upload.
+        </p>
+
+        <h3>Fetch All Metadata Up Front</h3>
+        <p>
+          Returning every image record keeps the API simple, but it delays first render and forces the
+          client to reconcile data the user may never scroll to. A small cursor-based page size keeps
+          initial load bounded while still working with virtualization and scroll restoration.
+        </p>
+
+        <h3>Placeholder Hashes Instead of Thumbnails</h3>
+        <p>
+          ThumbHash and BlurHash are useful for perceived loading quality, especially with mixed
+          aspect ratios, but they are not image delivery. They avoid blank cards while thumbnails
+          load; they do not reduce the bytes or decode cost of the final image.
+        </p>
+
+        <h3>Pre-generate Every Possible Size</h3>
+        <p>
+          Pre-generation is production-friendly at scale, but every possible size is heavier than
+          needed for this exercise. A bounded set of gallery variants is enough to demonstrate the
+          delivery strategy without extra infrastructure.
+        </p>
+
+        <div class="callout">
+          The challenged version of this ADR is narrower than the base decision: the backend owns
+          the contract, metadata, and upload thumbnails, but the implementation should stay local,
+          cheap, and achievable inside the exercise window.
+        </div>
+      </article>
+
+      <nav class="footer-nav" aria-label="ADR pagination">
+        <a class="button" href="./001-gallery-rendering-strategy.html">Previous: Rendering</a>
+        <a class="button" href="./003-resilient-batch-upload-architecture.html">Next: Uploads</a>
+      </nav>
+    </main>
+  </body>
+</html>

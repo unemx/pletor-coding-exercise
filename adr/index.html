@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PictoShare Architecture Decision Records</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="./index.html" aria-label="PictoShare ADR home">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <span>PictoShare ADRs</span>
+        </a>
+        <nav class="nav" aria-label="Architecture decision records">
+          <a href="./001-gallery-rendering-strategy.html">Rendering</a>
+          <a href="./002-image-delivery-thumbnail-strategy.html">Images</a>
+          <a href="./003-resilient-batch-upload-architecture.html">Uploads</a>
+          <a href="./004-folder-structure.html">Structure</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">Architecture decisions</p>
+        <h1>Production choices for a <span class="gradient-text">fast visual gallery.</span></h1>
+        <p class="lede">
+          These ADRs document the main technical decisions behind the take-home implementation:
+          how the gallery stays smooth, how images are delivered efficiently, how uploads remain
+          trustworthy, and how the codebase is organized for review.
+        </p>
+      </section>
+
+      <section class="adr-grid" aria-label="ADR list">
+        <a class="adr-card" href="./001-gallery-rendering-strategy.html">
+          <span class="adr-number">ADR-001</span>
+          <div>
+            <h2>Gallery Rendering Strategy</h2>
+            <p>Virtualized rendering with a mixed-ratio layout to keep 2000+ images smooth.</p>
+          </div>
+          <span class="card-link">Read decision</span>
+        </a>
+
+        <a class="adr-card" href="./002-image-delivery-thumbnail-strategy.html">
+          <span class="adr-number">ADR-002</span>
+          <div>
+            <h2>Image Delivery and Thumbnails</h2>
+            <p>Serve appropriately sized assets instead of loading originals into small cards.</p>
+          </div>
+          <span class="card-link">Read decision</span>
+        </a>
+
+        <a class="adr-card" href="./003-resilient-batch-upload-architecture.html">
+          <span class="adr-number">ADR-003</span>
+          <div>
+            <h2>Resilient Batch Upload Architecture</h2>
+            <p>Use Uppy with XHRUpload and Golden Retriever for resilient time-boxed batch uploads.</p>
+          </div>
+          <span class="card-link">Read decision</span>
+        </a>
+
+        <a class="adr-card" href="./004-folder-structure.html">
+          <span class="adr-number">ADR-004</span>
+          <div>
+            <h2>Feature-Oriented Folder Structure</h2>
+            <p>Keep gallery, upload, API, and shared UI boundaries clear without over-engineering.</p>
+          </div>
+          <span class="card-link">Read decision</span>
+        </a>
+      </section>
+    </main>
+  </body>
+</html>
