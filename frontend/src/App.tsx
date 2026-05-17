@@ -1,5 +1,4 @@
 import "./App.css";
-import React from "react";
 import { StatusMessage } from "./components/ui/StatusMessage";
 import { GallerySection } from "./features/gallery/components/GallerySection";
 import { useImages } from "./features/gallery/hooks/useImages";
