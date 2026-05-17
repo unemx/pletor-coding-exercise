@@ -1,11 +1,15 @@
+import io
+import logging
 import random
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from PIL import Image as PILImage
@@ -20,13 +24,18 @@ UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 THUMBNAIL_DIR = UPLOAD_DIR / "thumbnails"
 THUMBNAIL_DIR.mkdir(exist_ok=True)
+REMOTE_THUMBNAIL_DIR = UPLOAD_DIR / "remote-thumbnails"
+REMOTE_THUMBNAIL_DIR.mkdir(exist_ok=True)
 API_BASE_URL = "http://localhost:8000"
-CARD_THUMBNAIL_WIDTH = 400
-HIGH_DENSITY_THUMBNAIL_WIDTH = 800
-THUMBNAIL_QUALITY = 82
+CARD_THUMBNAIL_WIDTH = 320
+HIGH_DENSITY_THUMBNAIL_WIDTH = 640
+THUMBNAIL_QUALITY = 72
+PRIORITY_THUMBNAIL_COUNT = 4
+REMOTE_THUMBNAIL_TIMEOUT_SECONDS = 12
 FAILURE_RATE = 0.15  # 15% random failure rate to simulate real-world conditions
 
 DATABASE_URL = "sqlite+aiosqlite:///./test.db"
+logger = logging.getLogger("pictoshare.images")
 
 engine = create_async_engine(DATABASE_URL, echo=True)
 SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -84,7 +93,7 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Add this after creating the FastAPI app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # or ["*"] for all origins (not recommended for production)
+    allow_origins=["http://localhost:5173", "http://localhost:4173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -133,7 +142,7 @@ def build_remote_thumbnail_url(original_url: str, target_width: int) -> str:
             "w": str(target_width),
             "h": str(target_height),
             "fit": query_params.get("fit", "crop"),
-            "q": "80",
+            "q": "70",
             "auto": "format",
         }
     )
@@ -158,6 +167,72 @@ def get_local_upload_path(url: str, *, allow_thumbnails: bool = False) -> Option
 
 def build_upload_url(path: Path) -> str:
     return f"{API_BASE_URL}/uploads/{path.relative_to(UPLOAD_DIR).as_posix()}"
+
+def get_remote_thumbnail_cache_path(image: Image, target_width: int) -> Path:
+    return REMOTE_THUMBNAIL_DIR / f"{image.id}-{target_width}.webp"
+
+def get_cached_remote_thumbnail_urls(image: Image) -> Optional[tuple[str, str]]:
+    thumbnail_path = get_remote_thumbnail_cache_path(image, CARD_THUMBNAIL_WIDTH)
+    thumbnail_2x_path = get_remote_thumbnail_cache_path(image, HIGH_DENSITY_THUMBNAIL_WIDTH)
+
+    if not thumbnail_path.exists() or not thumbnail_2x_path.exists():
+        return None
+
+    return build_upload_url(thumbnail_path), build_upload_url(thumbnail_2x_path)
+
+def download_remote_image(url: str) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "User-Agent": "PictoShare thumbnail warmer/1.0",
+        },
+    )
+
+    with urllib.request.urlopen(request, timeout=REMOTE_THUMBNAIL_TIMEOUT_SECONDS) as response:
+        return response.read()
+
+def save_resized_thumbnail(source_image: PILImage.Image, image: Image, target_width: int) -> Path:
+    target_variant_width = min(target_width, source_image.width)
+    target_variant_height = max(1, round(target_variant_width * source_image.height / source_image.width))
+    thumbnail = source_image.resize(
+        (target_variant_width, target_variant_height),
+        PILImage.Resampling.LANCZOS,
+    )
+    thumbnail = normalize_thumbnail_image(thumbnail)
+    thumbnail_path = get_remote_thumbnail_cache_path(image, target_width)
+    thumbnail.save(thumbnail_path, "WEBP", quality=THUMBNAIL_QUALITY, method=6)
+    return thumbnail_path
+
+def ensure_remote_thumbnail_variants(image: Image) -> Optional[tuple[str, str]]:
+    if get_local_upload_path(image.url):
+        return None
+
+    cached_urls = get_cached_remote_thumbnail_urls(image)
+    if cached_urls:
+        return cached_urls
+
+    source_url = build_remote_thumbnail_url(image.url, HIGH_DENSITY_THUMBNAIL_WIDTH)
+
+    try:
+        source_bytes = download_remote_image(source_url)
+        with PILImage.open(io.BytesIO(source_bytes)) as source_image:
+            source_image = ImageOps.exif_transpose(source_image)
+            thumbnail_path = save_resized_thumbnail(source_image, image, CARD_THUMBNAIL_WIDTH)
+            thumbnail_2x_path = save_resized_thumbnail(source_image, image, HIGH_DENSITY_THUMBNAIL_WIDTH)
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as error:
+        logger.warning("Failed to cache remote thumbnail for image %s: %s", image.id, error)
+        return None
+
+    return build_upload_url(thumbnail_path), build_upload_url(thumbnail_2x_path)
+
+def warm_remote_thumbnail_cache(images: list[Image]) -> None:
+    for image in images:
+        ensure_remote_thumbnail_variants(image)
+
+def delete_remote_thumbnail_cache(image: Image) -> None:
+    for target_width in (CARD_THUMBNAIL_WIDTH, HIGH_DENSITY_THUMBNAIL_WIDTH):
+        get_remote_thumbnail_cache_path(image, target_width).unlink(missing_ok=True)
 
 def get_image_dimensions_from_file(file_path: Path) -> tuple[int, int]:
     with PILImage.open(file_path) as image:
@@ -208,17 +283,23 @@ def serialize_image(image: Image) -> dict:
     else:
         width, height = get_dimensions_from_url(original_url)
 
-    if image.thumbnail_url:
+    cached_remote_thumbnail_urls = get_cached_remote_thumbnail_urls(image)
+
+    if local_upload_path and image.thumbnail_url:
         thumbnail_url = image.thumbnail_url
     elif local_upload_path:
         thumbnail_url = original_url
+    elif cached_remote_thumbnail_urls:
+        thumbnail_url = cached_remote_thumbnail_urls[0]
     else:
         thumbnail_url = build_remote_thumbnail_url(original_url, CARD_THUMBNAIL_WIDTH)
 
-    if image.thumbnail_2x_url:
+    if local_upload_path and image.thumbnail_2x_url:
         thumbnail_2x_url = image.thumbnail_2x_url
     elif local_upload_path:
         thumbnail_2x_url = None
+    elif cached_remote_thumbnail_urls:
+        thumbnail_2x_url = cached_remote_thumbnail_urls[1]
     else:
         thumbnail_2x_url = build_remote_thumbnail_url(original_url, HIGH_DENSITY_THUMBNAIL_WIDTH)
 
@@ -386,6 +467,11 @@ async def on_startup():
             db.add_all(fake_images)
             await db.commit()
 
+        priority_result = await db.execute(
+            select(Image).order_by(Image.id.desc()).limit(PRIORITY_THUMBNAIL_COUNT)
+        )
+        warm_remote_thumbnail_cache(priority_result.scalars().all())
+
 @app.get("/", response_model=dict)
 def read_root():
     return {"Hello": "World"}
@@ -470,6 +556,7 @@ async def upload_image(
 
 @app.get("/images/", response_model=ImagePage)
 async def list_images(
+    background_tasks: BackgroundTasks,
     limit: int = Query(50, ge=1, le=100),
     cursor: Optional[int] = Query(None, ge=1),
     db: AsyncSession = Depends(get_db),
@@ -482,6 +569,13 @@ async def list_images(
     images = result.scalars().all()
     page_items = images[:limit]
     next_cursor = page_items[-1].id if len(images) > limit and page_items else None
+    priority_items = page_items[:PRIORITY_THUMBNAIL_COUNT] if cursor is None else []
+    remaining_items = page_items[PRIORITY_THUMBNAIL_COUNT:] if cursor is None else page_items
+
+    warm_remote_thumbnail_cache(priority_items)
+
+    if remaining_items:
+        background_tasks.add_task(warm_remote_thumbnail_cache, remaining_items)
 
     return {
         "items": [serialize_image(image) for image in page_items],
@@ -513,6 +607,8 @@ async def delete_image(image_id: int, db: AsyncSession = Depends(get_db)):
             thumbnail_2x_path = get_local_upload_path(image.thumbnail_2x_url, allow_thumbnails=True)
             if thumbnail_2x_path:
                 thumbnail_2x_path.unlink(missing_ok=True)
+    else:
+        delete_remote_thumbnail_cache(image)
     await db.delete(image)
     await db.commit()
     return None

@@ -15,6 +15,9 @@ interface ImageCardOverlayProps {
 
 export const ImageCardImage = ({ imageProps, photo }: ImageCardImageProps) => {
   const [hasImageError, setHasImageError] = React.useState(false)
+  const loading = photo.isPriority ? 'eager' : 'lazy'
+  const fetchPriority = photo.isPriority ? 'high' : 'low'
+  const decoding = photo.isPriority ? 'sync' : 'async'
 
   React.useEffect(() => {
     setHasImageError(false)
@@ -41,8 +44,9 @@ export const ImageCardImage = ({ imageProps, photo }: ImageCardImageProps) => {
     <img
       {...imageProps}
       alt={imageProps.alt ?? photo.title}
-      decoding="async"
-      loading="lazy"
+      decoding={decoding}
+      fetchPriority={fetchPriority}
+      loading={loading}
       onError={handleImageError}
     />
   )

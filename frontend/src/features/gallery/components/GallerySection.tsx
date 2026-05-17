@@ -20,8 +20,9 @@ interface GallerySectionProps {
 
 const FALLBACK_WIDTH = 400
 const FALLBACK_HEIGHT = 300
-const CARD_THUMBNAIL_WIDTH = 400
-const HIGH_DENSITY_THUMBNAIL_WIDTH = 800
+const CARD_THUMBNAIL_WIDTH = 320
+const HIGH_DENSITY_THUMBNAIL_WIDTH = 640
+const PRIORITY_IMAGE_COUNT = 4
 
 const getSafeDimensions = (image: Image) => {
   if (image.width > 0 && image.height > 0) {
@@ -53,7 +54,7 @@ const getResponsiveVariant = (
   }
 }
 
-const toGalleryPhoto = (image: Image): GalleryPhoto => {
+const toGalleryPhoto = (image: Image, index: number): GalleryPhoto => {
   const { width, height } = getSafeDimensions(image)
   const srcSet = [
     getResponsiveVariant(image.thumbnail_url, width, height, CARD_THUMBNAIL_WIDTH),
@@ -67,6 +68,7 @@ const toGalleryPhoto = (image: Image): GalleryPhoto => {
 
   return {
     id: image.id,
+    isPriority: index < PRIORITY_IMAGE_COUNT,
     key: String(image.id),
     src: image.thumbnail_url,
     width,
@@ -126,7 +128,7 @@ export const GallerySection = ({
           onLoadMore()
         }
       },
-      { rootMargin: '800px 0px' },
+      { rootMargin: '400px 0px' },
     )
 
     observer.observe(loadMoreElement)
